@@ -1,0 +1,52 @@
+# v1 curated source allowlist — quality over quantity
+# Do not add sources here without reviewing ToS, rate limits, and credibility tier.
+
+version: 1
+
+# How often the ingestion job should run (documented for operators; scheduler uses this hint)
+refresh_interval_minutes: 60
+
+# Target funnel per ingestion run (see ranking service)
+funnel:
+  fetch_cap_per_source: 25      # max raw items kept per source before merge
+  after_dedupe_cap: 100         # max items entering score stage
+  after_score_cap: 30           # max after ranking
+  surface_cap: 15               # max persisted as "surfaced" for the app feed
+
+sources:
+  - id: techcrunch
+    name: TechCrunch
+    type: rss
+    url: https://techcrunch.com/feed/
+    credibility: news
+    category_weight: 0.40
+
+  - id: venturebeat
+    name: VentureBeat
+    type: rss
+    url: https://venturebeat.com/feed/
+    credibility: news
+    category_weight: 0.40
+
+  - id: openai_blog
+    name: OpenAI Blog
+    type: rss
+    url: https://openai.com/blog/rss.xml
+    credibility: official
+    category_weight: 0.30
+
+  - id: github_ai_trending
+    name: GitHub (AI repos, recent stars)
+    type: github_search
+    # Query is passed to GitHub REST search/repositories
+    github_query: "topic:machine-learning stars:>800"
+    credibility: community
+    category_weight: 0.20
+
+  - id: product_hunt
+    name: Product Hunt (tech + AI topics)
+    type: product_hunt
+    # GraphQL topic slug list; requires PRODUCT_HUNT_TOKEN in env
+    topic_slugs: ["artificial-intelligence", "tech"]
+    credibility: community
+    category_weight: 0.20
