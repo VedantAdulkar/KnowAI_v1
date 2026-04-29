@@ -5,14 +5,25 @@ FastAPI service that **ingests** from a curated allowlist (RSS, GitHub, Product 
 ## Requirements
 
 - **Python 3.12+** (this project was run on **3.14** on Windows).
-- Recommended: **virtualenv** at `backend/.venv`.
+
+### Python environment (use venv only)
+
+Do **not** `pip install` into your system Python. Everything should run from **`backend/.venv`**.
 
 ```powershell
 cd backend
 py -3 -m venv .venv
-.\.venv\Scripts\pip install --upgrade pip
-.\.venv\Scripts\pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\pip.exe install -r requirements.txt
 ```
+
+After this, prefer:
+
+- **`.\.venv\Scripts\python.exe`** for scripts and `python -m …`
+- **`.\.venv\Scripts\pip.exe`** for installs
+- **`.\.venv\Scripts\uvicorn.exe`** (or **`.\run_dev.ps1`**, which calls uvicorn inside `.venv`)
+
+Or activate once per shell: **`.\.venv\Scripts\Activate.ps1`** (Windows), then `pip` / `python` resolve to the venv.
 
 Copy **`.env.example`** to **`.env`** and set variables as needed.
 
@@ -41,36 +52,70 @@ Copy **`.env.example`** to **`.env`** and set variables as needed.
 
 ## Running locally
 
-### Option A — `run_dev.ps1` (Windows)
+### Option A — `run_dev.bat` (Windows, works if `.ps1` opens in Notepad)
+
+```bat
+cd backend
+run_dev.bat
+```
+
+Double‑click **`run_dev.bat`** in Explorer, or run it from **Command Prompt**. It runs **`.venv\Scripts\python.exe -m uvicorn`** (not `uvicorn.exe`, so **Device Guard** often allows it), with **`--reload-delay 1.5`** to reduce rapid reloads under **OneDrive**.
+
+### Option A-stable — `run_stable.bat` (no auto-reload)
+
+```bat
+cd backend
+run_stable.bat
+```
+
+Same app and **`/ui/`**, but **no `--reload`** — avoids reload noise and subprocess races while you demo or browse.
+
+### Option A2 — `run_dev.ps1` (PowerShell only)
 
 ```powershell
 cd backend
 .\run_dev.ps1
 ```
 
+Use **`.\`** and run inside **PowerShell**. If **`run_dev.ps1` opens in Notepad** when double‑clicked, your `.ps1` association is wrong — use **`run_dev.bat`** above instead.
+
 Starts **uvicorn** with:
 
 - Host **`127.0.0.1`**
 - Port **`8001`** (8000 was blocked on the original dev machine; change the script if you prefer another port)
-- **`--reload-dir app`** and **`--reload-dir config`** so `.venv` does not trigger reload loops
+- **`--reload-dir app`**, **`config`**, and **`static\web`** so `.venv` does not trigger reload loops
 
-### Option B — module entrypoint
+### Option B — `python -m app.main` (no `uvicorn.exe`; same settings as `_dev()`)
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m app.main
 ```
 
-Uses the same host/port/reload settings as defined in `app/main.py` (`_dev()`).
+Uses host/port/reload dirs inside `app/main.py`. Prefer this if **`python -m uvicorn`** is still blocked.
 
-### Option C — uvicorn CLI
+### Option C — full `uvicorn` flags via Python module
 
-```powershell
+Same as **`run_dev.bat`**, explicit one-liner:
+
+```bat
 cd backend
-.\.venv\Scripts\uvicorn.exe app.main:app --reload --host 127.0.0.1 --port 8001 --reload-dir app --reload-dir config
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --reload-delay 1.5 --host 127.0.0.1 --port 8001 --reload-dir app --reload-dir config --reload-dir static\web
 ```
 
 Interactive docs: **http://127.0.0.1:8001/docs**
+
+## Web UI (no Node.js)
+
+The API serves a **static** web app (vanilla JS + CSS) from `static/web/` via explicit routes (not a catch‑all mount), so **`/ui/`**, **`/ui/styles.css`**, and **`/ui/app.js`** always resolve:
+
+- **http://127.0.0.1:8001/ui/** — HTML shell.
+- **http://127.0.0.1:8001/** — redirects to `/ui/`.
+- **http://127.0.0.1:8001/ui** — redirects to `/ui/`.
+
+The page calls **`GET /feed`** on the same origin. Bookmarks use `localStorage`. Edit files under **`static/web/`** and refresh; with `--reload`, include **`static\web`** in `--reload-dir` (see `run_dev.bat` / `app/main.py`).
+
+If the page is **blank**, hard‑refresh (**Ctrl+F5**) and check the browser **Network** tab: **`/ui/app.js`** and **`/ui/styles.css`** should return **200** (not blocked by an extension or policy).
 
 ## HTTP API
 
@@ -81,6 +126,8 @@ Returns `{"status":"ok"}`.
 ### `POST /ingest`
 
 Runs the ingestion job synchronously (can take tens of seconds depending on network).
+
+**Note:** Opening **`/ingest` in the tab bar sends GET**, which used to return **405 Method Not Allowed**. A **`GET /ingest`** page now explains this and includes a **form button** that sends **POST** so you can trigger ingest from the browser without Swagger.
 
 **Response** (`IngestResponse`):
 
@@ -94,7 +141,7 @@ Runs the ingestion job synchronously (can take tens of seconds depending on netw
 
 ### `GET /feed?limit=15`
 
-Returns ranked **swipe cards** from the database.
+Returns ranked **swipe cards** from the database. Each successful call prints one line to the **API process stdout** (timestamp UTC, count, first few item ids) so you can confirm refreshes in the terminal where uvicorn runs—not in the Vite dev window.
 
 Each card includes: `title`, `url`, `summary`, `description`, `published_at`, `source_id`, `source_name`, **`credibility`**, and **`scores`** (`recency`, `popularity`, `impact`, `relevance`, `total`).
 
@@ -129,7 +176,8 @@ backend/
 | Issue | What to try |
 |-------|-------------|
 | **WinError 10013** on port 8000 | Use another port (e.g. 8001) or check `netsh interface ipv4 show excludedportrange protocol=tcp`. |
-| **Reload spam** | Ensure reload is limited to `app` + `config` (see `run_dev.ps1` or `_dev()` in `main.py`). |
+| **Device Guard blocks `uvicorn.exe`** | Use **`python.exe -m uvicorn ...`** (`run_dev.bat` / `run_dev.ps1` do this) or **`python -m app.main`**. If **`python.exe` in `.venv`** is also blocked, IT must allowlist the venv or provide a corporate Python. |
+| **Reload spam / `CancelledError` / `KeyboardInterrupt` in subprocess** | Normal when **WatchFiles** restarts the worker. **OneDrive** can fire many saves — dev uses **`--reload-delay 1.5`** and only watches **`app`**, **`config`**, **`static\web`**. For no reload: **`run_stable.bat`** or omit **`--reload`**. |
 | **pydantic-core build failure** on Windows | Use a Python version with wheels, or upgrade `pydantic` / `pydantic-core` per `requirements.txt` (avoids Rust compile). |
 | **Empty feed** | Run **POST /ingest** at least once; check RSS URLs and tokens. |
 

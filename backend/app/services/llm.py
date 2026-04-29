@@ -1,8 +1,9 @@
 from app.settings import settings
+from app.services.text_clean import strip_html_tags
 
 
 def summarize_card(title: str, description: str | None) -> str:
-    body = (description or "").strip()[:4000]
+    body = (strip_html_tags(description) or "").strip()[:4000]
     if not settings.openai_api_key:
         if body:
             return (title.strip() + " — " + body[:280]).strip()[:400]

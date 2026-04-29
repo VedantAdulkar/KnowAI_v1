@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -43,6 +44,39 @@ def ingest(db: Session = Depends(get_db)) -> IngestResponse:
         surfaced=result["surfaced"],
         errors=result["errors"],
     )
+
+
+@app.get("/ingest", include_in_schema=False)
+def ingest_browser_help() -> HTMLResponse:
+    """Typing /ingest in the address bar sends GET; ingestion is POST-only. Offer a one-click POST."""
+    page = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ingest — use POST</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    code { background: #f4f4f4; padding: 0.15rem 0.35rem; border-radius: 4px; }
+    button { margin-top: 1rem; padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    .muted { color: #555; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <h1>Run ingestion</h1>
+  <p>
+    The address bar always sends a <strong>GET</strong> request.
+    This API only accepts <strong>POST</strong> on <code>/ingest</code>, so a bare URL shows
+    <code>Method Not Allowed</code> — that is expected.
+  </p>
+  <p class="muted">Use the button below (POST), or open <a href="/docs">/docs</a> and execute <strong>POST /ingest</strong>.</p>
+  <form method="post" action="/ingest">
+    <button type="submit">Run ingest now</button>
+  </form>
+  <p class="muted">After it finishes, open <a href="/ui/">the UI</a> or <a href="/feed">GET /feed</a>.</p>
+</body>
+</html>"""
+    return HTMLResponse(page)
 
 
 @app.get("/feed", response_model=FeedResponse)
@@ -77,7 +111,51 @@ def feed(limit: int = 15, db: Session = Depends(get_db)) -> FeedResponse:
                 ),
             )
         )
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    head = ",".join(str(c.id) for c in cards[:6]) if cards else "—"
+    print(f"[KnowAI] GET /feed @ {ts} UTC — count={len(cards)} limit={limit} head_ids=[{head}]", flush=True)
+
     return FeedResponse(items=cards)
+
+
+STATIC_WEB_DIR = Path(__file__).resolve().parent.parent / "static" / "web"
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/ui/")
+
+
+@app.get("/ui", include_in_schema=False)
+def ui_no_trailing_slash() -> RedirectResponse:
+    return RedirectResponse(url="/ui/")
+
+
+@app.get("/ui/", include_in_schema=False)
+def ui_index() -> FileResponse:
+    path = STATIC_WEB_DIR / "index.html"
+    if not path.is_file():
+        raise HTTPException(status_code=500, detail=f"UI bundle missing: {path}")
+    return FileResponse(path, media_type="text/html; charset=utf-8")
+
+
+@app.get("/ui/styles.css", include_in_schema=False)
+def ui_styles() -> FileResponse:
+    return FileResponse(STATIC_WEB_DIR / "styles.css", media_type="text/css; charset=utf-8")
+
+
+@app.get("/ui/app.js", include_in_schema=False)
+def ui_app_js() -> FileResponse:
+    return FileResponse(STATIC_WEB_DIR / "app.js", media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/ui/index.html", include_in_schema=False)
+def ui_index_html() -> FileResponse:
+    """Same as `/ui/` (some browsers or bookmarks request this path)."""
+    path = STATIC_WEB_DIR / "index.html"
+    if not path.is_file():
+        raise HTTPException(status_code=500, detail=f"UI bundle missing: {path}")
+    return FileResponse(path, media_type="text/html; charset=utf-8")
 
 
 # For quick local runs without uvicorn CLI package layout
@@ -91,7 +169,12 @@ def _dev() -> None:
         host="127.0.0.1",
         port=8001,
         reload=True,
-        reload_dirs=[str(backend_root / "app"), str(backend_root / "config")],
+        reload_delay=1.5,
+        reload_dirs=[
+            str(backend_root / "app"),
+            str(backend_root / "config"),
+            str(backend_root / "static" / "web"),
+        ],
     )
 
 

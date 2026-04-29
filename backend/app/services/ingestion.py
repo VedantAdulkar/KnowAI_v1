@@ -12,6 +12,7 @@ from app.config_loader import SourceEntry, SourcesDocument, load_sources
 from app.models import Item, Source
 from app.services.llm import summarize_card
 from app.services.ranking import NormalizedItem, apply_funnel, score_item
+from app.services.text_clean import strip_html_tags
 from app.settings import settings
 
 
@@ -45,8 +46,11 @@ def fetch_rss(client: httpx.Client, src: SourceEntry, cap: int) -> list[Normaliz
         link = entry.get("link") or entry.get("id")
         title = (entry.get("title") or "Untitled").strip()
         summary = entry.get("summary") or entry.get("description")
-        if summary and len(summary) > 2000:
-            summary = summary[:2000]
+        if summary is not None:
+            summary = str(summary)
+            if len(summary) > 2000:
+                summary = summary[:2000]
+            summary = strip_html_tags(summary)
         published = _struct_time_to_dt(entry.get("published_parsed")) or _struct_time_to_dt(
             entry.get("updated_parsed")
         )
@@ -198,6 +202,7 @@ def _sync_sources(db: Session, doc: SourcesDocument) -> None:
 
 
 def run_ingestion(db: Session) -> dict[str, Any]:
+    print("\n[KnowAI] Ingest started…", flush=True)
     errors: list[str] = []
     doc = load_sources(settings.sources_path)
     funnel = doc.funnel
@@ -227,16 +232,19 @@ def run_ingestion(db: Session) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     for it in surfaced:
         scores = score_item(it)
-        summary = summarize_card(it.title, it.description)
+        title_plain = (strip_html_tags(it.title) or it.title).strip()
+        desc_plain = strip_html_tags(it.description)
+        summary = summarize_card(title_plain, desc_plain)
+        excerpt_src = (desc_plain or "")[:2000]
         existing = db.execute(select(Item).where(Item.url == it.url)).scalar_one_or_none()
         if existing:
-            existing.title = it.title
-            existing.description = it.description
+            existing.title = title_plain
+            existing.description = desc_plain
             existing.published_at = it.published_at
             existing.credibility = it.credibility
             existing.scores = scores
             existing.summary = summary
-            existing.raw_excerpt = (it.description or "")[:2000]
+            existing.raw_excerpt = excerpt_src
             existing.popularity_signal = it.popularity_signal
             existing.updated_at = now
         else:
@@ -244,13 +252,13 @@ def run_ingestion(db: Session) -> dict[str, Any]:
                 Item(
                     source_id=it.source_id,
                     url=it.url,
-                    title=it.title,
-                    description=it.description,
+                    title=title_plain,
+                    description=desc_plain,
                     published_at=it.published_at,
                     credibility=it.credibility,
                     scores=scores,
                     summary=summary,
-                    raw_excerpt=(it.description or "")[:2000],
+                    raw_excerpt=excerpt_src,
                     popularity_signal=it.popularity_signal,
                     created_at=now,
                     updated_at=now,
@@ -258,6 +266,17 @@ def run_ingestion(db: Session) -> dict[str, Any]:
             )
 
     db.commit()
+    print(
+        f"\n[KnowAI] Ingest finished — fetched={len(raw)} deduped={len(deduped)} "
+        f"scored={len(scored)} surfaced={len(surfaced)} errors={len(errors)}",
+        flush=True,
+    )
+    if errors:
+        for e in errors[:12]:
+            print(f"  [KnowAI] ingest note: {e}", flush=True)
+        if len(errors) > 12:
+            print(f"  [KnowAI] … and {len(errors) - 12} more", flush=True)
+    print("[KnowAI] Database updated — clients can GET /feed\n", flush=True)
     return {
         "fetched": len(raw),
         "after_dedupe": len(deduped),
